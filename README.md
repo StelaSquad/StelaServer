@@ -4,6 +4,7 @@ Small Server meant to run on a raspberry pi and handle requests that will corres
 ## Installation
 * Clone
 * pip install Flask
+* pip intall flask-autodoc
 * ./run.sh
 
 ##
