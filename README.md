@@ -7,5 +7,9 @@ Small Server meant to run on a raspberry pi and handle requests that will corres
 * pip intall flask-autodoc
 * ./run.sh
 
+## Testing
+###Running Unit Tests
+	* python index_test.py
+
 ##
 Tested on python 3.6.2 and python 3.6.4

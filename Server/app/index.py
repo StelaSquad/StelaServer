@@ -7,11 +7,9 @@ auto = Autodoc(app)
 # TODO: use blueprints to seperate api across files
 
 
-
-
-
-
 # Endpoint for obtaining info about the API
+# Check flask_autodoc for usage
+# TODO: Add a costumized template
 @app.route('/documentation')
 def documentation():
 	return auto.html(author='StelaSquad',
