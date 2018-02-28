@@ -2,6 +2,11 @@ from flask import Flask, jsonify, request
 from flask import render_template
 from flask_autodoc import Autodoc
 
+# TODO: move these imports along with the 
+# serail coms functionality to another file
+import serial
+import time
+
 app = Flask(__name__)
 auto = Autodoc(app)
 # TODO: use blueprints to seperate api across files
@@ -20,6 +25,29 @@ def documentation():
 # TODO: Create Coordinate Object
 # TODO: probs want to store previous and current coordinates.
 coordinates = {'azimuth' : [0, 0], 'equitorial': [0, 0]}
+
+
+# Get current coordinates
+@app.route('/drive')
+@auto.doc()
+def drive_motor():
+	"""Communicates to Artduino in order to 
+		drive a motor for demonstration"""
+	ser = serial.Serial('/dev/ttyS8')
+	c=0;
+
+	while c<=5:
+		ser.write('2')
+		time.sleep(1)
+		ser.write('1')
+		time.sleep(1)
+		c += 1
+
+	return jsonify("Driving Motor")
+
+
+
+
 
 # Get current coordinates
 @app.route('/coordinates')
