@@ -42,3 +42,17 @@ def add_calibration_coordinate():
     coms.testFunc()
     # request = request.get_json() - will get us the post info
     return '', 204
+
+@app.route('/testPost', methods=['POST'])
+@auto.doc()
+def testPost():
+    """Test Post endpoint"""
+    return request.get_json()
+
+@app.route('/testGet')
+@auto.doc()
+def testGet():
+    """Test Post endpoint"""
+    response = jsonify({
+        'message': "Success"})
+    return response, 200
