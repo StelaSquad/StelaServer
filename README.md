@@ -3,9 +3,13 @@ Small Server meant to run on a raspberry pi and handle requests that will corres
 
 ## Installation
 * Clone
+* cd StelaServer/app/
 * pip install Flask
-* pip intall flask-autodoc
+* pip install flask-autodoc
+* pip install Serial
 * ./run.sh
+
+Can also run ./install.sh to pip install dependencies.
 
 ## Testing
 ###Running Unit Tests
