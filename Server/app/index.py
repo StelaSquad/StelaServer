@@ -4,7 +4,7 @@ sys.path.append('../')
 from flask import Flask, jsonify, request
 from flask import render_template
 from flask_autodoc import Autodoc
-from coms import coms
+from driver import coms
 from scope import telescope, coordinates
 
 tele = telescope.Telescope()
