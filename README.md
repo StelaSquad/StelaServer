@@ -16,9 +16,7 @@ Small Server meant to run on a raspberry pi and handle requests that will corres
  	
  	*pip install Flask
  	*pip intall flask-autodoc
- 
-
- 
+	*pip install Serial
 
 ## Testing
 ###Running Unit Tests
