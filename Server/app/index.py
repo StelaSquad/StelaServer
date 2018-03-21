@@ -38,10 +38,31 @@ def get_coordinates():
 @app.route('/calibration', methods=['POST'])
 @auto.doc()
 def add_calibration_coordinate():
-    """Starts calibration procedure"""
+    """Starts calibration procedure
+    For now it will only return provided 
+    coordinate """
+
     coms.testFunc()
-    # request = request.get_json() - will get us the post info
-    return '', 204
+    if request.method == 'POST':
+        if (request.form['azimuth'] != None) and (request.form['altitude'] != None):
+            
+            D = {"azimuth": request.form['azimuth']
+                     , "altitude": request.form['altitude']}
+
+            return jsonify(D)
+        else:
+            error = 'invalid coordinate'
+    
+    return jsonify(error)
+
+
+@app.route('/manual',methods=['POST'])
+@auto.doc()
+def manual_control():
+    """Recieves commands that will allow manual
+    control of telescopes angle."""
+
+    return request.get_json()
 
 @app.route('/testPost', methods=['POST'])
 @auto.doc()
