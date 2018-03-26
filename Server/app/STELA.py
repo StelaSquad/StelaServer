@@ -39,6 +39,7 @@ class STELA():
                                         'flux(V)')
         self.reset_cats = False
         self.triangulation_class = Triangulate()
+        self.online = self.connect()
         self.setup_cats()
 
     
@@ -47,9 +48,10 @@ class STELA():
         Sets up the necessary catalogs, prints them to a file. (No parameters)
         
         """
-        os.chdir("./app")
+                
         self.online = self.connect()
-        
+        os.chdir("app")
+
         if self.online == False:
             warnings.warn('No internet connection. Running offline mode.',Warning)
         
@@ -62,7 +64,7 @@ class STELA():
                 os.mkdir('catalog')
         
         # If nearby star catalog nonexistant, create one
-        if os.path.exists('./catalog/naked.dat') == False:
+        if os.path.exists('catalog/naked.dat') == False:
             
             if self.online == False:
                 raise RuntimeError("Could not find saved catalogs. Please connect to internet and retry")
@@ -83,8 +85,7 @@ class STELA():
         else:
             # Read in naked eye catalog file
             self.naked = Table.read('./catalog/naked.dat',format='ascii')
-        
-        os.chdir("../")
+        os.chdir("..")   
         
             
     def setup_serial(self):
@@ -93,6 +94,7 @@ class STELA():
         don't work so switching USB ports might solve any problems."""
         
         ports_closed = []
+        portsopen = 0
         
         for i in range(20):
             # New path to try
@@ -107,22 +109,40 @@ class STELA():
                     print 'Found connection at COM' + str(i)
                     self.COM = 5
                     self.ser = ser
+                    portsopen = 1
                     break
                     
             except serial.SerialException as err:
                 # Otherwise, check if error has to do with permissions.
                 if err.args[0] == 13:
                     ports_closed += [i]
-                pass
-            
+        
+        if os.path.exists("/dev/serial/by-id"):
+	    for i in os.listdir("/dev/serial/by-id"):
+	        print "trying other paths..."
+                try:
+                    ser = serial.Serial("/dev/serial/by-id/" + i)
+                    print i
+                    ser.write("setup")
+                
+                    if ser.readline()[:5] == "STELA":
+                        print "Found connection!"
+                        self.COM = "unknown"
+                        self.ser = ser
+                        portsopen = 1
+                        break
+                except: 
+                    pass
+        
+        if portsopen == 0:
             # If no serial port, raise error and if permission issues were found.
-            if i == 19:
-                if len(ports_closed) > 0:
-                    msg = "Connection Failed. Unable to access ports: " + str(ports_closed) + ". Try changing permissions."
-                else:
-                    msg = "Connection Failed. Try different usb port."
-                    
-                raise RuntimeError(msg)
+            if len(ports_closed) > 0:
+       	        msg = "Connection Failed. Unable to access ports: " + str(ports_closed) + ". Try changing permissions."
+            else:
+      	        msg = "Connection Failed. Try different usb port."
+        
+          
+            raise RuntimeError(msg)
                 
      
     def set_targ(self, az, alt):
@@ -131,7 +151,7 @@ class STELA():
         msg = 'set_targ:' + str([az,alt])
         self.ser.write(msg)
         
-    def get_pos(self,return_targ=False):
+    def get_pos(self):
         """ Gets the current arduino position and target. """
         now = time.Time.now()
         
@@ -149,9 +169,6 @@ class STELA():
         self.ard_az = azalt[0]
         self.ard_alt = azalt[1]
         self.update_time = now
-        
-        if return_targ==True:
-            return self.ard_az, self.ard_alt,targ[0],targ[1]
         
         return self.ard_az, self.ard_alt
         
