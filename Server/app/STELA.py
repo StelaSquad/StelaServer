@@ -8,6 +8,13 @@ import os
 import serial
 import json
 import warnings
+import sys
+
+def blockPrint():
+    sys.stdout = open(os.devnull, 'w')
+
+def enablePrint():
+    sys.stdout = sys.__stdout__
 
 class STELA():
     """
@@ -15,10 +22,14 @@ class STELA():
     
     Quantities and objects:
         STELA.naked: catalog of nearest stars, brightes in sky
+        STELA.ard_pos: last stored position of arduino
+        STELA.ard_targ: last stored arduino target
     
     Functions:
         STELA.setup_cats:
             Setup catalog files.
+        STELA.setup_serial:
+            Initiate serial connection with Arduino.
         STELA.get_ref_stars:
             Given an estimated latitude and longitude, returns the three brightest stars in the sky to align.
         STELA.gen_mock_obs:
@@ -27,20 +38,28 @@ class STELA():
             After calling get_ref_stars, and measuring the differences in alt-az coordinates of the three
             points, STELA.triangulate can locate the new latitude and longitude that accounts for the error
             in telescope positioning.
+        STELA.set_targ:
+            Sends target alt azimuth coordinate to arduino.
+        STELA.get_pos:
+            Reads current arduino poisition.
         
     """
     
     def __init__(self):
-        self.savefile = 'savefile.sv'
+        self.savefile = 'steladata/savefile.sv'
         self.simbad = aq.Simbad()
         self.simbad.TIMEOUT = 1000000
         self.simbad.remove_votable_fields('coordinates')
-        self.simbad.add_votable_fields('id(NAME)', 'id(HD)','ra','dec','otype(V)','sp','plx','z_value',
-                                        'flux(V)')
+        self.simbad.add_votable_fields('id(NAME)', 'id(HD)','id(NGC)','ra','dec','otype(V)',
+                                       'sp','plx','z_value', 'flux(V)')
         self.reset_cats = False
         self.triangulation_class = Triangulate()
-        self.online = self.connect()
-        self.setup_cats()
+        #self.setup_cats()
+        
+        
+        import sys, os
+
+
 
     
     def setup_cats(self):
@@ -48,44 +67,70 @@ class STELA():
         Sets up the necessary catalogs, prints them to a file. (No parameters)
         
         """
-                
+        
+        #os.chdir("./app")
         self.online = self.connect()
-        os.chdir("app")
-
+        
         if self.online == False:
             warnings.warn('No internet connection. Running offline mode.',Warning)
         
         # If user requests fresh import, do it
         if self.reset_cats == True and self.online == True:
             print "Deleting old catalog..."
-            os.system('rm -r catalog')
+            os.system('rm -r steladata')
+        elif self.reset_cats == True: 
+            print "Requested refresh of catalogs but no internet connection. Find one!"
             
-        if os.path.exists('catalog') == False:
-                os.mkdir('catalog')
-        
-        # If nearby star catalog nonexistant, create one
-        if os.path.exists('catalog/naked.dat') == False:
-            
+        if os.path.exists('steladata') == False:
+                os.mkdir('steladata')
+                
+        # Download Gliese and New Galactic Catalog data
+        # GJ
+        if os.path.exists('./steladata/gj.dat') == False:
             if self.online == False:
-                raise RuntimeError("Could not find saved catalogs. Please connect to internet and retry")
+                raise RuntimeError("No saved catalogs, run once with internet")
+            print "Downloading GJ data..."
+            self.gj = self.simbad.query_catalog('GJ')
+            self.gj.write('./steladata/gj.dat',format='ascii')
+            print "Done!"
+        else:
+            print "GJ catalog file found."
+            self.gj = Table.read('./steladata/gj.dat',format='ascii')
+           
+        # NGC
+        if os.path.exists('./steladata/ngc.dat') == False:
+            if self.online == False:
+                raise RuntimeError("No saved catalogs, run once with internet")
+            print "Downloading NGC data..."
+            self.ngc = self.simbad.query_object("NGC ????", wildcard=True)
+            self.ngc.write('./steladata/ngc.dat',format="ascii")
+            print "Done!"
+        
+        else:
+            print "NGC catalog file found."
+            self.ngc = Table.read('steladata/ngc.dat',format='ascii')
+        
+        
+        # Create catalog of naked eye stars (used in calibration)
+        if os.path.exists('./steladata/naked.dat') == False:
             
-            "Loading new files..."
-            query_naked =  self.simbad.query_catalog('GJ')
-            
+            print "Setting up naked eye catalogs"
             # remove objects with no recorded magnitude
-            select = np.ones(len(query_naked),dtype='bool')
-            select[np.where(np.isnan(np.array(query_naked['FLUX_V'])))[0]] = False
-            query_naked_rm_nans = query_naked[select]
+            select = np.ones(len(self.gj),dtype='bool')
+            select[np.where(np.isnan(np.array(self.gj['FLUX_V'])))[0]] = False
+            query_naked_rm_nans = self.gj[select]
             
             self.naked = Table(np.unique(query_naked_rm_nans))
             self.naked.sort("FLUX_V")
             
             # Write it to the catalogs folder
-            self.naked.write('./catalog/naked.dat',format='ascii')
+            self.naked.write('./steladata/naked.dat',format='ascii')
         else:
-            # Read in naked eye catalog file
-            self.naked = Table.read('./catalog/naked.dat',format='ascii')
-        os.chdir("..")   
+            self.naked = Table.read('./steladata/naked.dat',format='ascii')
+                     
+        
+        #os.chdir("../")
+        
         
             
     def setup_serial(self):
@@ -94,7 +139,6 @@ class STELA():
         don't work so switching USB ports might solve any problems."""
         
         ports_closed = []
-        portsopen = 0
         
         for i in range(20):
             # New path to try
@@ -106,44 +150,32 @@ class STELA():
                 ser.write('setup')
                 
                 if ser.readline()[:5] == 'STELA':
-                    print 'Found connection at COM' + str(i)
+                    print 'Found STELA arduino running on on COM' + str(i)
                     self.COM = 5
                     self.ser = ser
-                    portsopen = 1
                     break
                     
             except serial.SerialException as err:
                 # Otherwise, check if error has to do with permissions.
                 if err.args[0] == 13:
                     ports_closed += [i]
-        
-        if os.path.exists("/dev/serial/by-id"):
-	    for i in os.listdir("/dev/serial/by-id"):
-	        print "trying other paths..."
-                try:
-                    ser = serial.Serial("/dev/serial/by-id/" + i)
-                    print i
-                    ser.write("setup")
-                
-                    if ser.readline()[:5] == "STELA":
-                        print "Found connection!"
-                        self.COM = "unknown"
-                        self.ser = ser
-                        portsopen = 1
-                        break
-                except: 
-                    pass
-        
-        if portsopen == 0:
+                pass
+            except IOError:
+                pass
+            
             # If no serial port, raise error and if permission issues were found.
-            if len(ports_closed) > 0:
-       	        msg = "Connection Failed. Unable to access ports: " + str(ports_closed) + ". Try changing permissions."
-            else:
-      	        msg = "Connection Failed. Try different usb port."
-        
-          
-            raise RuntimeError(msg)
+            if i == 19:
+                if len(ports_closed) > 0:
+                    msg = "Connection Failed. Unable to access ports: " + str(ports_closed) + ". Try changing permissions."
+                else:
+                    msg = "Connection Failed. Try different usb port."
+                    
+                raise RuntimeError(msg)
                 
+    def search(self,string):
+        pass
+        
+        
      
     def set_targ(self, az, alt):
         """ Sends the target coordinates in the arduino. """
@@ -151,7 +183,7 @@ class STELA():
         msg = 'set_targ:' + str([az,alt])
         self.ser.write(msg)
         
-    def get_pos(self):
+    def get_pos(self,return_targ=False):
         """ Gets the current arduino position and target. """
         now = time.Time.now()
         
@@ -166,11 +198,19 @@ class STELA():
         azalt = np.fromstring(pos_str,sep=', ')
         targ = np.fromstring(targ_str, sep=', ')
         
-        self.ard_az = azalt[0]
-        self.ard_alt = azalt[1]
+        self.ard_pos = azalt
+        self.ard_targ = targ
         self.update_time = now
+
         
-        return self.ard_az, self.ard_alt
+        if return_targ==True:
+            return self.ard_pos, self.ard_targ
+        
+        return self.ard_pos
+    
+    def set_pos(self,newpos):
+        msg = 'set_pos:' + str(newpos)
+        self.ser.write(msg)
         
     def get_ref_stars(self,representation='SkyCoord'):
         """
@@ -284,8 +324,8 @@ class STELA():
                 The difference in [azimuth,altitude] between object 3 and object 2
         """
         
-        ra = cp.Angle(self.cel_calib["RA"], unit=u.hourangle)
-        dec = cp.Angle(self.cel_calib["DEC"], unit=u.deg)
+        ra = cp.Angle(self.cel_calib.ra, unit=u.hourangle)
+        dec = cp.Angle(self.cel_calib.dec, unit=u.deg)
 
         v = np.array([ra.rad,dec.rad]).T
 
@@ -299,18 +339,17 @@ class STELA():
         n.obstime=self.time
 
         [self.lon,self.lat] = [180-n.altaz.az.deg, n.altaz.alt.deg]
-        self.home = [self.lon,self.lat]
+        self.home_coors = [self.lon,self.lat]
+        #self.save()
         
-        h = cp.EarthLocation(self.home[0]*u.deg,self.home[1]*u.deg)
-        self.tel_frame = cp.AltAz(location=h,obstime=self.time)
+        h = cp.EarthLocation(self.home_coors[0]*u.deg,self.home_coors[1]*u.deg)
+        self.home = cp.AltAz(location=h,obstime=self.time)
         v3 = cp.SkyCoord(v[2][0],v[2][1],unit=u.rad)
         self.tel_pos = v3
 
-        #return [self.on,self.lat]
-        
         
     def save(self):
-        [lon,lat] = self.location
+        [lon,lat] = self.location 
         savedata = {'location': [lon.value,lat.value], 
                     'location_units': [lon.unit.to_string(), lat.unit.to_string()]}
         
@@ -328,12 +367,37 @@ class STELA():
         
         
     def connect(self):
-        
-        response = os.system('ping -c 1 google.com')
+                
+        print "Testing internet connection..."
+        response = os.system('ping -c 1 -W 1 google.com > nullfile.temp')
+        os.system("rm nullfile.temp")
         if response == 0:
+            print "Connection succeeded!"
             return True
         elif response >= 0:
+            print "Connection failed."
             return False
+        
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
+    
     
     
     
@@ -391,7 +455,7 @@ class Triangulate():
         self.dist=[]
         self.dth=0
         self.dph=0
-        self.obserrs = [np.pi/180/60,np.pi/180/60]
+        self.obserrs = [np.pi/180/30,np.pi/180/30]
 
     
     def xp(self,a,b):

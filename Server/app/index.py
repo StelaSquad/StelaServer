@@ -7,66 +7,83 @@ from flask_autodoc import Autodoc
 import serial
 import time
 import STELA as st
-s = st.STELA()
-s.setup_cats()
-s.setup_serial()
+import zmq
+import json
+
+port = "5122"
+context = zmq.Context()
+socket = context.socket(zmq.PAIR)
+socket.connect("tcp://localhost:%s" % port)
+socket.SNDTIMEO = 1000
 
 app = Flask(__name__)
 auto = Autodoc(app)
 app.config['DEBUG'] = False
 
-stage = 0
+st.count = 0
+print "Setup Complete"
+
+calib_coors=[[],[],[]]
+
+
 # Setup code. Currently only gets reference stars and returns them
 @app.route('/setup')
 def setup():
+    dic = {"command": "setup"}
+    socket.send(json.dumps(dic))
+    c = 0
+    return socket.recv()
 
-	if stage == 0:
-		try:
-			s.load()
-		except:
-			return 'No location stored. Please send location to "/set_location"'
-	
-		coors = s.get_ref_stars('list')
-		data = {'altaz_calib': coors}
-		return jsonify(data)
+@app.route("/set_calib")
+def set_calib():
+    dic = {"command": "set_calib"}
+    socket.send(json.dumps(dic))
+    return "ok"
+    
+@app.route("/calibrate")
+def calibrate():
+    dic = {"command": "calibrate"}
+    socket.send(json.dumps(dic))
+    return "ok"
+    
 
 # Move command. Can be used to request movement in [azimuth,altitude] directions.
 @app.route('/move',methods=['POST'])
 def move():
-	data = request.get_json()
-	[mvaz,mvalt] = data['move']
-	s.get_pos()
-	print mvaz, s.ard_az
-	s.set_targ(mvaz+s.ard_az, mvalt + s.ard_alt)
-	return 'ok'
+    data = request.get_json()
+    data["command"] = "move"
+    socket.send(json.dumps(data))
+    return 'ok'
 
 # Set the target coordinate. Haywire unless calibrated already.
 @app.route('/set_targ',methods=['POST'])
 def set_targ():
-	data = request.get_json()
-	[az,alt] = data['targ']
-	s.get_pos()
-	s.set_targ(az,alt)
-	return 'ok'
+    data = request.get_json()
+    data["command"] = "set_targ"
+    socket.send(json.dumps(data))
+    return 'ok'
 
 # Returns the current azimuth altitude coordinates of the telescope. Currently useless.
 @app.route('/get_pos')
 def get_pos():
-	az,alt,targaz,targalt = s.get_pos(return_targ=True)
-	data = {'pos':[az,alt],'targ':[targaz,targalt]}
-	return jsonify(data)
+    data = {"command": "get_pos"}
+    socket.send(json.dumps(data))
+    #time.sleep(1)
+    data = json.loads(socket.recv())
+    return json.dumps(data)
 
 # Set the users location as [longitude,latitude] and save it into a file
 @app.route('/set_location',methods=['POST'])
 def set_location():
-	data = request.get_json()
-	s.location = data['location']
-	s.save()
+    data = request.get_json()
+    data["command"] = 'set_location'
+    socket.send(json.dumps(data))
+    return "ok"
 
 @app.route('/documentation')
 def documentation():
-	return auto.html(author='StelaSquad',
-					date="Last Update: 2018-02-18")
+    return auto.html(author='StelaSquad',
+                     date="Last Update: 2018-02-18")
 
 
 
