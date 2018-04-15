@@ -197,6 +197,11 @@ class STELA():
         import ctypes.util
         import time
 
+
+        timestr = [int(x) for x in timestr.strip().split('-')]
+
+
+
         # /usr/include/linux/time.h:
         #
         # define CLOCK_REALTIME                     0
