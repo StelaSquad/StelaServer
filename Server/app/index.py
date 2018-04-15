@@ -27,11 +27,11 @@ calib_coors=[[],[],[]]
 
 
 # Setup code. Currently only gets reference stars and returns them
-@app.route('/setup')
+@app.route('/setup',methods=['POST'])
 def setup():
-    dic = {"command": "setup"}
+    data = request.get_json()
+    data["command"] = "setup"
     socket.send(json.dumps(dic))
-    c = 0
     return socket.recv()
 
 @app.route("/set_calib")

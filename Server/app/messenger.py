@@ -38,7 +38,9 @@ while True:
         
         # List of possible commands and the appropriate responses.
         if command == "setup":
+            
             st.load()
+            st.set_time(msg["time"])
             coors = st.get_ref_stars(representation='list')
             dic = {"calib_coors": coors}
             socket.send(json.dumps(dic))

@@ -162,20 +162,37 @@ class STELA():
                 pass
             except IOError:
                 pass
-            
-            # If no serial port, raise error and if permission issues were found.
-            if i == 19:
-                if len(ports_closed) > 0:
-                    msg = "Connection Failed. Unable to access ports: " + str(ports_closed) + ". Try changing permissions."
-                else:
-                    msg = "Connection Failed. Try different usb port."
-                    
-                raise RuntimeError(msg)
+          
+        if os.path.exists("/dev/serial/by-id"):
+            for i in os.listdir("/dev/serial/by-id"):
+                print "trying other paths..."
+
+                try:
+                    ser = serial.Serial("/dev/serial/by-id/" + i)
+                    print i
+                    ser.write("setup")
+                    if ser.readline()[:5] == "STELA":
+                        print "Found connection!"
+                        self.COM = "unknown"
+                        self.ser = ser
+                        portsopen = 1
+                        break
+                except:
+                    pass
+        # If no serial port, raise error and if permission issues were found.
+        if portsopen==0:
+            if len(ports_closed) > 0:
+                msg = "Connection Failed. Unable to access ports: " + str(ports_closed) + ". Try changing permissions."
+            else:
+                msg = "Connection Failed. Try different usb port."
+                
+            raise RuntimeError(msg)
                 
     def search(self,string):
         pass
         
-        
+    def set_time(timestr):
+        print timestr
      
     def set_targ(self, az, alt):
         """ Sends the target coordinates in the arduino. """
@@ -369,16 +386,16 @@ class STELA():
     def connect(self):
                 
         print "Testing internet connection..."
-        response = os.system('ping -c 1 -W 1 google.com > nullfile.temp')
-        os.system("rm nullfile.temp")
-        if response == 0:
+        import urllib2
+
+        try:
+            urllib2.urlopen('http://216.58.192.142', timeout=1)
             print "Connection succeeded!"
             return True
-        elif response >= 0:
+        except urllib2.URLError as err:
             print "Connection failed."
             return False
-        
-    
+
     
     
     
