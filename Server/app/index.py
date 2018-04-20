@@ -29,9 +29,10 @@ calib_coors=[[],[],[]]
 # Setup code. Currently only gets reference stars and returns them
 @app.route('/setup',methods=['POST'])
 def setup():
-    data = request.get_json()
+    data = request.get_json(force=True)
+    data = json.loads(request.data)
     data["command"] = "setup"
-    socket.send(json.dumps(dic))
+    socket.send(json.dumps(data))
     return socket.recv()
 
 @app.route("/set_calib")
@@ -45,12 +46,20 @@ def calibrate():
     dic = {"command": "calibrate"}
     socket.send(json.dumps(dic))
     return "ok"
+
+@app.route('/search',methods=['POST'])
+def search():
+    data = json.loads(request.data)
+    data["command"] = "search"
+    socket.send(json.dumps(data))
+    response = json.loads(socket.recv())
+    return json.dumps(response)
     
 
 # Move command. Can be used to request movement in [azimuth,altitude] directions.
 @app.route('/move',methods=['POST'])
 def move():
-    data = request.get_json()
+    data = json.loads(request.data)
     data["command"] = "move"
     socket.send(json.dumps(data))
     return 'ok'
@@ -58,7 +67,7 @@ def move():
 # Set the target coordinate. Haywire unless calibrated already.
 @app.route('/set_targ',methods=['POST'])
 def set_targ():
-    data = request.get_json()
+    data = json.loads(request.data)
     data["command"] = "set_targ"
     socket.send(json.dumps(data))
     return 'ok'
@@ -72,10 +81,12 @@ def get_pos():
     data = json.loads(socket.recv())
     return json.dumps(data)
 
+
+
 # Set the users location as [longitude,latitude] and save it into a file
 @app.route('/set_location',methods=['POST'])
 def set_location():
-    data = request.get_json()
+    data = json.loads(request.data)
     data["command"] = 'set_location'
     socket.send(json.dumps(data))
     return "ok"
