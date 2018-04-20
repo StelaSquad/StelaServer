@@ -3,18 +3,16 @@ import astroquery.simbad as aq
 import astropy.coordinates as cp
 import astropy.time as time
 import astropy.units as u
-from astropy.table import Table
+import astropy.table as table
 import os
 import serial
 import json
 import warnings
 import sys
-
-def blockPrint():
-    sys.stdout = open(os.devnull, 'w')
-
-def enablePrint():
-    sys.stdout = sys.__stdout__
+import urllib2
+from astropy.utils import iers
+iers.conf.auto_download = False
+Table = table.Table
 
 class STELA():
     """
@@ -50,16 +48,12 @@ class STELA():
         self.simbad = aq.Simbad()
         self.simbad.TIMEOUT = 1000000
         self.simbad.remove_votable_fields('coordinates')
-        self.simbad.add_votable_fields('id(NAME)', 'id(HD)','id(NGC)','ra','dec','otype(V)',
+        self.simbad.add_votable_fields('id(NAME)', 'ids','id(NGC)','id(M)','id(HD)','ra','dec','otype(V)',
                                        'sp','plx','z_value', 'flux(V)')
         self.reset_cats = False
         self.triangulation_class = Triangulate()
-        #self.setup_cats()
-        
-        
-        import sys, os
-
-
+        self.calibrated = False
+        cp.builtin_frames.utils.iers.conf.remote_timeout = 0.5
 
     
     def setup_cats(self):
@@ -84,31 +78,30 @@ class STELA():
         if os.path.exists('steladata') == False:
                 os.mkdir('steladata')
                 
-        # Download Gliese and New Galactic Catalog data
-        # GJ
-        if os.path.exists('./steladata/gj.dat') == False:
-            if self.online == False:
-                raise RuntimeError("No saved catalogs, run once with internet")
-            print "Downloading GJ data..."
-            self.gj = self.simbad.query_catalog('GJ')
-            self.gj.write('./steladata/gj.dat',format='ascii')
-            print "Done!"
-        else:
-            print "GJ catalog file found."
-            self.gj = Table.read('./steladata/gj.dat',format='ascii')
-           
-        # NGC
-        if os.path.exists('./steladata/ngc.dat') == False:
-            if self.online == False:
-                raise RuntimeError("No saved catalogs, run once with internet")
-            print "Downloading NGC data..."
-            self.ngc = self.simbad.query_object("NGC ????", wildcard=True)
-            self.ngc.write('./steladata/ngc.dat',format="ascii")
-            print "Done!"
+        # Download necessary catalogs
+        catlabels = ["GJ","New Galactic Catalog","Messier","Henry Draper"]
+        cats = ["gj","ngc","m","hr"]
+        catobjs = []
         
-        else:
-            print "NGC catalog file found."
-            self.ngc = Table.read('steladata/ngc.dat',format='ascii')
+        for i in range(len(cats)):
+            
+            if os.path.exists('./steladata/' + cats[i].lower() + '.dat') == False:
+                if self.online == False:
+                    raise RuntimeError("No saved catalogs, run once with internet")
+                    
+                print "Downloading " + catlabels[i] +" data..."
+                cat = self.simbad.query_catalog(cats[i].upper())
+                select = np.array(cat["RA"] != '') *  np.array(cat["DEC"] != '')
+                catobjs += [cat[select]]
+                catobjs[-1].write('./steladata/'+ cats[i].lower() + '.dat',format='ascii')
+                print "Done!"
+                
+            else:
+                print catlabels[i] + " catalog file found."
+                catobjs += [Table.read('./steladata/'+cats[i].lower()+'.dat',format='ascii')]
+                
+        [self.gj, self.ngc, self.m, self.hd] = catobjs
+        catobjs = None
         
         
         # Create catalog of naked eye stars (used in calibration)
@@ -118,7 +111,7 @@ class STELA():
             # remove objects with no recorded magnitude
             select = np.ones(len(self.gj),dtype='bool')
             select[np.where(np.isnan(np.array(self.gj['FLUX_V'])))[0]] = False
-            query_naked_rm_nans = self.gj[select]
+            query_naked_rm_nans = self.gj[select][:200]
             
             self.naked = Table(np.unique(query_naked_rm_nans))
             self.naked.sort("FLUX_V")
@@ -126,11 +119,7 @@ class STELA():
             # Write it to the catalogs folder
             self.naked.write('./steladata/naked.dat',format='ascii')
         else:
-            self.naked = Table.read('./steladata/naked.dat',format='ascii')
-                     
-        
-        #os.chdir("../")
-        
+            self.naked = Table.read('./steladata/naked.dat',format='ascii')        
         
             
     def setup_serial(self):
@@ -139,6 +128,7 @@ class STELA():
         don't work so switching USB ports might solve any problems."""
         
         ports_closed = []
+        portsopen=0
         
         for i in range(20):
             # New path to try
@@ -153,13 +143,14 @@ class STELA():
                     print 'Found STELA arduino running on on COM' + str(i)
                     self.COM = 5
                     self.ser = ser
+                    portsopen+=1
                     break
                     
             except serial.SerialException as err:
                 # Otherwise, check if error has to do with permissions.
                 if err.args[0] == 13:
                     ports_closed += [i]
-                pass
+                
             except IOError:
                 pass
           
@@ -169,16 +160,16 @@ class STELA():
 
                 try:
                     ser = serial.Serial("/dev/serial/by-id/" + i)
-                    print i
                     ser.write("setup")
                     if ser.readline()[:5] == "STELA":
-                        print "Found connection!"
-                        self.COM = "unknown"
+                        print "Found connection with: " + i
+                        self.COM = "Unknown"
                         self.ser = ser
                         portsopen = 1
                         break
                 except:
                     pass
+                
         # If no serial port, raise error and if permission issues were found.
         if portsopen==0:
             if len(ports_closed) > 0:
@@ -189,15 +180,115 @@ class STELA():
             raise RuntimeError(msg)
                 
     def search(self,string):
-        pass
         
-    def set_time(timestr):
-        print timestr
-     
-    def set_targ(self, az, alt):
+        print "Searching for: " + string
+        self.online = self.connect(verbose=False)
+        
+        result = None
+        matches = []
+        
+        try:
+            # search all catalogs
+            for cat in [self.m,self.gj,self.ngc,self.hr]:
+                names = cat["IDS"]
+                arr = names.view(type=np.recarray)
+
+                low = np.array([s.lower() for s in arr])
+                true = np.array([string.lower() in l for l in low])
+
+                match = np.where(true==True)[0]
+
+                if len(match) > 0:
+                    matches += [cat[match]]
+
+            matches = table.vstack(matches)
+
+            #This algorithm is jenky but works somewhat
+            scores = []
+            for ma in matches:
+                name_l = ma["IDS"].tolist().split("|")
+                a = [string.lower() in name.lower() for name in name_l]
+                possible = np.array(name_l)[a]
+                lens = np.array([abs(len(string) - len(s)) for s in possible])
+                scores += [ lens[np.where(lens==min(lens))] ]
+
+            scores=np.array(scores)
+            result = matches[np.where(scores == min(scores))[0]]
+            
+        except:
+            pass
+        
+        try:
+            coors = cp.get_body(string,time.Time.now())
+            try:
+                altaz = coors.transform_to(self.home)
+                self.set_targ([coors.az.deg,coors.az.deg])
+                return {"Name": string}
+            except:
+                return {"Name": string}
+        except:
+            pass
+            
+        # Check connectivity
+        if self.online == True and type(result) == type(None):
+            result = self.simbad.query_object(string)
+
+        if type(result) == type(None):
+            return {"Error":"No object found"}
+        [main, name, ids, idngc, idm, 
+         idhd, ra, dec, otype, sptype, 
+         plx, redshift, mag]          = result.as_array()[0]
+            
+        
+        usenames=[]
+        for i in [name,idm,idngc,idhd]:
+            if i != '':
+                usenames += [i]
+                
+        data = {"Name": usenames}
+        if mag != None:
+            data["Mag"] = str(mag)
+        if redshift != None:
+            data["Redshift"] = str(redshift)
+        if otype != None:
+            data["Otype"] = otype
+        else:
+            data["Otype"] = "Unknown"
+        if sptype != '':
+            data["Sptype"] = str(sptype)
+        if plx != None:
+            data["Plx"] = str(plx)
+            distpc = 1000./plx
+            distpcrnd = round(distpc,3)
+            distly = round(distpc*3.2616,3)
+            data["Distance"] = str(distpcrnd) + " pc, " + str(distly) + " ly"
+                
+        if plx != None and mag != None:
+            Msun = 4.74
+            absmag = mag - 5 *(np.log10(distpc) - 1)
+            L = 10 ** (1./2.5 * (Msun - absmag))
+            data["Luminosity"] = str(L)
+            
+        if self.calibrated == True:
+            celcoor = cp.SkyCoord(ra,dec,unit=[u.hourangle,u.deg])
+            altazcoor = celcoor.transform_to(self.home)
+            self.set_targ([altazcoor.az.deg,altazcoor.alt.deg])
+                
+        return data
+            
+        
+    def set_time(self,datetime):
+        l = datetime.split("-")
+        date_str = l[1]+l[2]+l[3]+l[4]+l[0]+"."+l[5]
+        if os.environ["USER"] == 'pi':
+            os.system("sudo date " + date_str)
+        else:
+            print "Not setting time."
+
+    def set_targ(self, array):
         """ Sends the target coordinates in the arduino. """
         
-        msg = 'set_targ:' + str([az,alt])
+        msg = 'set_targ:' + str(array)
         self.ser.write(msg)
         
     def get_pos(self,return_targ=False):
@@ -219,7 +310,6 @@ class STELA():
         self.ard_targ = targ
         self.update_time = now
 
-        
         if return_targ==True:
             return self.ard_pos, self.ard_targ
         
@@ -253,26 +343,33 @@ class STELA():
                 telescope to approximate position of stars.
         """
         
-        
+        if self.connect(verbose=False) == False:
+            cp.builtin_frames.utils.iers.conf.auto_download=False 
         [lon_est, lat_est] = self.location
         
         # Set observation time for calibration
         self.time = time.Time.now()
-
+        
         # Set up approximate earth frame
         loc_est = cp.EarthLocation(lon_est,lat_est)
         earth_n = cp.AltAz(0*u.deg,90*u.deg,location=loc_est,obstime=self.time)
         
         # Coordinates of all visible stars
         ra= self.naked["RA"].data
-        dec = self.naked["RA"].data
-        cat = cp.SkyCoord(ra = ra,dec = dec,unit=[u.hourangle,u.deg])
+        dec = self.naked["DEC"].data
         
+        cat = cp.SkyCoord(ra = ra,dec = dec,unit=['hourangle','deg'])
+        
+        print 1
         earth_n_cel = earth_n.transform_to(cat)
+    
+        print 2 
 
         # Choose stars that are at least 30 degrees above horizon
         select = earth_n_cel.separation(cat) < cp.Angle(60*u.deg)
         cat_close = cat[select]
+        
+        print 3
 
         # Select the first three
         coors=[cat_close[0]]
@@ -282,7 +379,7 @@ class STELA():
                 coors+=[i]
                 if len(coors) >= 3:
                     break
-        
+        print 4
                     
         cel_calib = cp.SkyCoord(coors)
         
@@ -328,7 +425,7 @@ class STELA():
         
         return [self.v2_v1, self.v3_v2]
     
-    def triangulate(self, v2_v1,v3_v2):
+    def triangulate(self, v2_v1,v3_v2,iterations=5):
         """
         Used to triangulate the true latitude and longitude corresponding to the norm of the telescope position.
         
@@ -345,8 +442,12 @@ class STELA():
         dec = cp.Angle(self.cel_calib.dec, unit=u.deg)
 
         v = np.array([ra.rad,dec.rad]).T
-
-        out = self.triangulation_class.triangulate(v[0],v[1],v[2],v2_v1,v3_v2)
+        
+        try:
+            out = self.triangulation_class.triangulate(v[0],v[1],v[2],v2_v1,v3_v2,iterations=iterations)
+        except Exception as e:
+            print e
+            
 
         n = cp.SkyCoord(out[0][0],out[0][1],unit=u.rad,frame='icrs')
 
@@ -363,6 +464,9 @@ class STELA():
         self.home = cp.AltAz(location=h,obstime=self.time)
         v3 = cp.SkyCoord(v[2][0],v[2][1],unit=u.rad)
         self.tel_pos = v3
+        self.set_pos(v3)
+        
+        self.calibrated = True
 
         
     def save(self):
@@ -383,17 +487,19 @@ class STELA():
         self.location = [loc[0]*u.Unit(loc_u[0]),loc[1]*u.Unit(loc_u[1])]
         
         
-    def connect(self):
-                
-        print "Testing internet connection..."
-        import urllib2
+    def connect(self,verbose=True):
+         
+        if verbose == True:
+            print "Testing internet connection..."
 
         try:
             urllib2.urlopen('http://216.58.192.142', timeout=1)
-            print "Connection succeeded!"
+            if verbose == True:
+                print "Connection succeeded!"
             return True
         except urllib2.URLError as err:
-            print "Connection failed."
+            if verbose == True:
+                print "Connection failed."
             return False
 
     
@@ -403,11 +509,7 @@ class STELA():
     
     
     
-    
-    
-    
-    
-    
+  
     
     
     
@@ -668,7 +770,6 @@ class Triangulate():
         
         #print obs*np.pi/180
         
-            
         n=self.comp_power
     
         obsth = obs[0]
@@ -678,66 +779,42 @@ class Triangulate():
         A = np.linspace(lims[0][0],lims[0][1],n)
         B = np.linspace(lims[1][0],lims[1][1],n)
         grid = np.meshgrid(A,B)
-        
-        flat = np.array([grid[0].flatten(),grid[1].flatten()]).T
-            
+                    
         # calculate observation vectors
         obj1_xyz = self.xyz(obj1coor[0],obj1coor[1]) # xyz(obj1[0],obj1[1])
         obj2_xyz = self.xyz(obj2coor[0],obj2coor[1]) # (obj2[0],obj2[1])
 
-
-        # For each potential A and B vector, calculate the theoretical change in theta and phi 
-        thp = []
-        php = []
-        for x in flat:
-            # Calculate the vectors in a frame [alpha, beta] on the surface of the earth
-            [thp1,php1] = self.vec_prime(x[0],x[1],obj1_xyz,form='th-ph')
-            [thp2,php2] = self.vec_prime(x[0],x[1],obj2_xyz,form='th-ph')
-
-            # Calculate theoretical difference between the two angles
-            thp += [thp2-thp1]
-            php += [php2-php1]
-
+        # For each potential A and B vector, calculate the theoretical change in theta and phi
+        
+        diff = lambda A1,B1: (np.array(self.vec_prime(A1,B1,obj2_xyz,form="th-ph")) -
+                              np.array(self.vec_prime(A1,B1,obj1_xyz,form="th-ph")))
+        
+        [thp,php] = np.array(map(diff,grid[0].flatten(),grid[1].flatten())).T
+        
         #back from column to 2d grid
-        thp= np.array(thp).reshape(n,n)
-        php= np.array(php).reshape(n,n)
-        
-        #print thp
-        
-        # Create surface that represents the True change in alt-az coords (as observed)
-        obs12_th = np.ones((n,n))*obsth
-        obs12_ph = np.ones((n,n))*obsph
-
-        # Take the observed delta-theta and delta-phi and compare it to our theoretical ones to figure out
-        # which values of A and B would allow for the observed changes.
-        
-        # Set up empty array for output valeues
-        sel_fin = np.array([])
+        thp = np.array(thp).reshape(n,n)
+        php = np.array(php).reshape(n,n)
         
         # Start real small with the binsize, extremely restrictive
         stdth = np.std(thp.flatten())
-        stdph = np.std(php.flatten())*2
-        
-        #width = (max(thp.flatten())-min(thp.flatten()))/2
-        
-        mod=0.01
-        dist = np.ones((n,n))*10**-12
-        
+        stdph = np.std(php.flatten())
+                
+        mod = (self.obserrs[0] + self.obserrs[1])/2
         
         while mod*stdth < 3*self.obserrs[0] and mod*stdph < 3*self.obserrs[1]:
             
-            mod*=1.01
-            
-        thdist = np.exp(- ((thp-obs12_th)/(mod*stdth))**2 )
-        phdist = np.exp(- ((php-obs12_ph)/(mod*stdph))**2 )
-                
-        #thdist = np.exp(- ((thp-obs12_th)/(self.obserrs[0]))**2 )
-        #phdist = np.exp(- ((php-obs12_ph)/(self.obserrs[1]))**2 )        
-                
-        dist = (thdist/np.sum(thdist))*(phdist/np.sum(phdist))
-        dist_norm = dist/np.sum(dist)
+            mod*=1.05
         
-        self.chain+=[dist_norm]
+        dA = A[1]-A[0]
+        dB = B[1]-B[0]
+        
+        thdist = np.exp(- ((thp-obsth)/(mod*stdth))**2 )
+        phdist = np.exp(- ((php-obsph)/(mod*stdph))**2 )
+                
+        dist = (thdist)*(phdist)
+        dist_norm = dist/np.sum(dist*dA*dB)
+        
+        #self.chain+=[dist_norm]
         
         return grid,dist_norm
     
@@ -760,6 +837,7 @@ class Triangulate():
         # bin both into a new, global data set.
         
         comb = c1*c2*c3
+        
         comb /= np.sum(comb)
                 
         self.dist+=[[grid,comb]]
@@ -773,13 +851,9 @@ class Triangulate():
         th_avg = np.sum(thn*th_ax)
         ph_avg = np.sum(phn*ph_ax)
         
-        #print sum(thn),sum(phn)
-        Np = np.sum(thn > 0.001)
-        n = len(thn)
         
         th_std = np.sqrt(np.sum( (th_ax - th_avg)**2 * thn))# * Np/(Np-1) )/ np.sqrt(n)
         ph_std = np.sqrt(np.sum( (ph_ax - ph_avg)**2 * phn))# * Np/(Np-1) )/ np.sqrt(n)
-        
         
         return np.array([[th_avg,ph_avg],[th_std,ph_std]])
 
@@ -811,14 +885,13 @@ class Triangulate():
         if sum(np.array(obserrs)==None) == 0:
             self.obserrs = obserrs
         
-        
         # Calculate difference between v1 and v3
         obs_v1_v3 = [obs_v1_v2[0]+ obs_v2_v3[0], obs_v1_v2[1]+ obs_v2_v3[1]]
         
         lims = [[0,2*np.pi],[-np.pi/2,np.pi/2]]
         
-        
-        for i in range(iterations):
+        i=0
+        while i < iterations:
             print "Running for lims: " + str(np.round(lims,5).tolist())
             
             # find the probability distributions for each observation
@@ -826,31 +899,36 @@ class Triangulate():
             _, c2 = self.find_valid(v1, v3, obs_v1_v3, lims=lims)
             _, c3 = self.find_valid(v2, v3, obs_v2_v3, lims=lims)
             
-            
-            if np.sum(np.isnan(c1*c2*c3) ==0):
+            if np.sum(np.isnan(c1*c2*c3)) > 0 :
+                print "Error in triangulation. Increasing obserrs in attempt to mend situation."
+                self.obserrs = [self.obserrs[i]*10 for i in [0,1]]
                 
+            else:
+
                 # Matches all three
                 [av,acc] = self.match(grid,c1,c2,c3)
-                
-                
+
+
                 # Finds the accuracy of the analysis, chooses new limits based on these
                 r = 5
                 dth = grid[0][0][1]-grid[0][0][0]
                 dph = grid[1][1][0]-grid[1][0][0]
-                
+
                 acc += np.array([dth,dph])/(r)
-                
+
                 lims = np.array([av - r*acc, av + r*acc]).T
                 
+                i+=1
                 
-            else:
-                print "minimum value reached"
-                break
                         
-            
-        self.lon = av[0]
-        self.lat = av[1]
-        self.errs = acc
+        try: 
+            self.lon = av[0]
+            self.lat = av[1]
+            self.errs = acc
+
+            print "Done."
+            return av,acc
         
-        print "Done."
-        return av,acc
+        except:
+            print "Unable to triangulate"
+            return None

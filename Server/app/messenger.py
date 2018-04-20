@@ -20,6 +20,8 @@ socket.bind("tcp://*:%s" % port)
 st = STELA.STELA()
 st.setup_cats()
 st.setup_serial()
+st.triangulation_class.comp_power = 40
+st.triangulation_class.obserrs = [0.01,0.01]
 
 calib_obs = [[],[],[]]
 c=0
@@ -61,16 +63,20 @@ while True:
             
             v2_v1 = [(calib_obs[1][i]-calib_obs[0][i])*pi/180 for i in [0,1]]
             v3_v2 = [(calib_obs[2][i]-calib_obs[1][i])*pi/180 for i in [0,1]]
-            st.triangulate(v2_v1,v3_v2)
+            st.triangulate(v2_v1,v3_v2,iterations=3)
             
             pos = st.cel_calib[2].transform_to(st.home)
             st.set_pos([pos.az.deg,pos.alt.deg])
             
-            print "Telescope position triangulated to: " + str(st.home_coors)      
+            print "Telescope position triangulated to: " + str(st.home_coors)     
+            
+        if command == "search":
+            outmsg = st.search(msg["string"])
+            socket.send(json.dumps(outmsg)) 
             
         if command == "set_targ":
             targ = msg["targ"]
-            st.set_targ(targ[0],targ[1])
+            st.set_targ([targ[0],targ[1]])
             print "Target Set: " + str(targ)
         
         if command == "get_pos":
@@ -84,7 +90,7 @@ while True:
             mv = msg["increment"]
             ard_targ = st.get_pos(return_targ = True)[1]
             newtarg = [ard_targ[i] + mv[i] for i in [0,1]]
-            st.set_targ(newtarg[0],newtarg[1])
+            st.set_targ([newtarg[0],newtarg[1]])
             print "Position target incremented by: " + str(mv)
             
         if command == "set_location":
